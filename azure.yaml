@@ -1,0 +1,14 @@
+name: dify-aca
+metadata:
+  template: dify-aca
+infra:
+  path: infra
+services: {}
+hooks:
+  preprovision:
+    shell: sh
+    run: ./scripts/preprovision.sh
+  postprovision:
+    shell: sh
+    run: ./scripts/postprovision.sh
+

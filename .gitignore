@@ -1,0 +1,6 @@
+.azure/
+.env
+.env.*
+*.log
+tmp/
+

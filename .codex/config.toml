@@ -1,0 +1,10 @@
+[mcp_servers.microsoft-learn]
+url = "https://learn.microsoft.com/api/mcp"
+
+[mcp_servers.azure]
+command = "npx"
+args = ["-y", "@azure/mcp@latest", "server", "start"]
+
+[mcp_servers.bicep]
+command = "zsh"
+args = ["-lc", "exec \"$(pwd)/.codex/scripts/run-bicep-mcp.sh\""]

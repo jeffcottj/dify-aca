@@ -1,0 +1,85 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "prefix": {
+      "value": "${DEPLOYMENT_PREFIX}"
+    },
+    "postgresAdminUsername": {
+      "value": "${POSTGRES_ADMIN_USERNAME}"
+    },
+    "postgresAdminPassword": {
+      "value": "${POSTGRES_ADMIN_PASSWORD}"
+    },
+    "postgresSkuName": {
+      "value": "${POSTGRES_SKU_NAME}"
+    },
+    "postgresSkuTier": {
+      "value": "${POSTGRES_SKU_TIER}"
+    },
+    "postgresStorageGb": {
+      "value": "${POSTGRES_STORAGE_GB}"
+    },
+    "redisSkuName": {
+      "value": "${REDIS_SKU_NAME}"
+    },
+    "difyApiImage": {
+      "value": "${DIFY_API_IMAGE}"
+    },
+    "difyWebImage": {
+      "value": "${DIFY_WEB_IMAGE}"
+    },
+    "difySandboxImage": {
+      "value": "${DIFY_SANDBOX_IMAGE}"
+    },
+    "difyPluginDaemonImage": {
+      "value": "${DIFY_PLUGIN_DAEMON_IMAGE}"
+    },
+    "gatewayImage": {
+      "value": "${GATEWAY_IMAGE}"
+    },
+    "ssrfProxyImage": {
+      "value": "${SSRF_PROXY_IMAGE}"
+    },
+    "enableConsoleAuth": {
+      "value": "${ENABLE_CONSOLE_AUTH}"
+    },
+    "entraTenantId": {
+      "value": "${ENTRA_TENANT_ID}"
+    },
+    "entraClientId": {
+      "value": "${ENTRA_CLIENT_ID}"
+    },
+    "entraClientSecret": {
+      "value": "${ENTRA_CLIENT_SECRET}"
+    },
+    "difySecretKey": {
+      "value": "${DIFY_SECRET_KEY}"
+    },
+    "difyInitPassword": {
+      "value": "${DIFY_INIT_PASSWORD}"
+    },
+    "pluginDaemonKey": {
+      "value": "${PLUGIN_DAEMON_KEY}"
+    },
+    "pluginDifyInnerApiKey": {
+      "value": "${PLUGIN_DIFY_INNER_API_KEY}"
+    },
+    "sandboxApiKey": {
+      "value": "${SANDBOX_API_KEY}"
+    },
+    "consoleAuthSigningKey": {
+      "value": "${CONSOLE_AUTH_SIGNING_KEY}"
+    },
+    "consoleAuthEncryptionKey": {
+      "value": "${CONSOLE_AUTH_ENCRYPTION_KEY}"
+    }
+  }
+}
+
