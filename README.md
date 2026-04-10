@@ -36,9 +36,10 @@ This repository provisions a low-cost first-pass Dify Community deployment on Az
 
 The operator workflow is:
 
-1. Configure an `azd` environment.
-2. Set the variables that are specific to your tenant and deployment.
-3. Run `azd up`.
+1. Run the interactive bootstrap to create or update the `azd` environment.
+2. Let the bootstrap apply defaults, optional overrides, and any Entra setup you want to automate.
+3. Optionally review `azd provision --preview`.
+4. Run `azd up`.
 
 The pre-provision hook generates missing secrets automatically. The post-provision hook enables `pgvector` in the Dify database.
 
@@ -91,41 +92,32 @@ azd auth login
 
 ## Quick start
 
-Create and select an `azd` environment:
+Use the interactive bootstrap:
+
+```bash
+sh scripts/bootstrap-env.sh
+```
+
+The bootstrap script will:
+
+- create or select an `azd` environment
+- set `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`, and `DEPLOYMENT_PREFIX`
+- explain optional PostgreSQL, Redis, and image overrides
+- generate missing local secret values
+- optionally help with console SSO through Entra ID
+- offer `azd provision --preview`
+- offer `azd up`
+
+If you prefer the older manual flow, the minimum values are still:
 
 ```bash
 azd env new
-```
-
-Set the minimum required values:
-
-```bash
 azd env set DEPLOYMENT_PREFIX dify
 azd env set AZURE_LOCATION eastus
-```
-
-If you want console SSO through Entra ID, set:
-
-```bash
-azd env set ENABLE_CONSOLE_AUTH true
-azd env set ENTRA_CLIENT_ID <app-registration-client-id>
-azd env set ENTRA_CLIENT_SECRET <app-registration-client-secret>
-azd env set ENTRA_TENANT_ID <tenant-id>
-```
-
-If you do not have the app registration ready yet, you can still deploy the platform with:
-
-```bash
-azd env set ENABLE_CONSOLE_AUTH false
-```
-
-Run the deployment:
-
-```bash
 azd up
 ```
 
-The hooks will:
+The hooks and bootstrap together will:
 
 - generate strong defaults for Dify and platform secrets
 - provision the Azure infrastructure
@@ -142,6 +134,7 @@ Required:
 - `AZURE_ENV_NAME`
 - `AZURE_LOCATION`
 - `DEPLOYMENT_PREFIX`
+- `AZURE_SUBSCRIPTION_ID`
 
 Optional but commonly overridden:
 
@@ -221,6 +214,17 @@ Because the final hostname is generated during deployment, the first deployment 
 
 - pre-register a broader redirect strategy you control later with a custom domain, or
 - deploy once with console auth disabled, capture `CONSOLE_URL`, update the app registration, then redeploy with auth enabled
+
+The bootstrap script supports that second pattern directly. If `CONSOLE_URL` is not known yet, it keeps `ENABLE_CONSOLE_AUTH=false`, stores the Entra values you already have, marks the environment as pending auth enablement, and can drive the second `azd up` after the redirect URI is updated.
+
+For the current repo implementation, the important Entra app registration requirements are:
+
+- single-tenant app registration
+- ID token issuance enabled
+- redirect URI set to `https://<console-gateway-app-name>.<managed-environment-default-domain>/.auth/login/aad/callback`
+- client ID, tenant ID, and client secret captured in the `azd` environment
+
+Simple console sign-in does not require Microsoft Graph `User.Read` delegated permission.
 
 ## Architecture notes
 
