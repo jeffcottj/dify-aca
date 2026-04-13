@@ -2,79 +2,67 @@
 
 ## Status
 
-This repository is a work in progress.
+This repository now provides a working `azd` + Bicep deployment baseline for running Dify Community Edition on Azure.
 
-It contains an initial `azd` + Bicep implementation for deploying Dify on Azure, but it is not finished and should not be treated as production-ready yet.
+It has been validated against a live Azure deployment with:
 
-What is implemented today:
-
-- a repo layout built around `azd up`
-- Bicep for the main Azure resources
-- ACA app definitions for the Dify service set
-- pre-provision and post-provision hooks
-- Key Vault-backed secret wiring
-- PostgreSQL `pgvector` bootstrap hook
-
-What has not been completed yet:
-
-- a real end-to-end deployment validation in Azure
-- smoke tests that prove the deployed apps come up healthy
-- confirmation that all Dify containers behave correctly on ACA with these commands and env vars
-- a hardened networking model
-- a clean Entra ID bootstrap story for the first deploy
-- app-level bootstrap automation inside Dify
-
-This repository provisions a low-cost first-pass Dify Community deployment on Azure using:
-
-- Azure Container Apps
-- Azure Database for PostgreSQL Flexible Server with `pgvector`
+- Dify services running on Azure Container Apps
+- PostgreSQL Flexible Server with `pgvector`
 - Azure Managed Redis
 - Azure Blob Storage
+- Azure Key Vault-backed secret wiring
+- optional Microsoft Entra ID protection on the console gateway
+- successful first-run Dify setup through `/install`
+
+This is a usable baseline, not a fully hardened platform. The main remaining gaps are operational hardening, more automated validation, and a cleaner story for future Dify upgrades.
+
+## What the repo deploys
+
+- Azure Container Apps for:
+  - Dify API
+  - Dify worker
+  - Dify beat
+  - Dify web
+  - Dify plugin daemon
+  - Dify sandbox
+  - SSRF proxy
+  - console gateway
+  - public app gateway
+- Azure Database for PostgreSQL Flexible Server
+- Azure Managed Redis
+- Azure Storage Account with separate blob containers for Dify files and plugins
 - Azure Key Vault
-- Azure Developer CLI (`azd`)
-- Bicep
+- Log Analytics workspace
 
 The operator workflow is:
 
 1. Run the interactive bootstrap to create or update the `azd` environment.
-2. Let the bootstrap apply defaults, optional overrides, and any Entra setup you want to automate.
+2. Let the bootstrap apply defaults, optional overrides, generated secrets, and optional Entra settings.
 3. Optionally review `azd provision --preview`.
 4. Run `azd up`.
+5. Open `CONSOLE_URL` and finish the Dify install flow.
 
 The pre-provision hook generates missing secrets automatically. The post-provision hook enables `pgvector` in the Dify database by temporarily allowing the operator public IP, connecting with a cached Python PostgreSQL client, and then removing that firewall rule.
 
-## Definition Of Done
-
-This project should not be considered done until the following are completed:
-
-- `azd up` succeeds from a clean machine with documented prerequisites only
-- the full deployment is exercised against a real Azure subscription
-- every ACA app reaches a healthy state after deployment
-- console auth is verified with a real Entra app registration
-- the public app gateway is verified independently from the console gateway
-- Dify file upload, background jobs, plugins, and knowledge indexing are validated
-- the README is updated with exact, tested operator steps instead of design assumptions
-- at least basic deployment verification or smoke-test automation is added
-- the remaining architectural risks called out below are either resolved or explicitly accepted
-
 ## Current scope
 
-This implementation intentionally optimizes for getting to a repeatable working baseline quickly:
+This implementation intentionally optimizes for a repeatable working baseline first:
 
-- One public environment first
+- one public environment at a time
 - Azure default `azurecontainerapps.io` hostnames
-- Public PaaS endpoints with TLS
-- Dify first-run setup remains manual
-- Entra ID protects the console gateway when enabled
-- No private endpoints, VNet integration, custom domains, or CI pipeline automation yet
+- public PaaS endpoints with TLS
+- manual Dify product bootstrap after infrastructure deployment
+- optional Entra auth on the console gateway
+- no private endpoints, VNet integration, custom domains, or CI/CD pipeline automation yet
 
 ## Prerequisites
 
 - `azd`
 - `az` 2.84.0 or later
 - `curl`
+- `openssl`
 - `python3`
-- An Azure subscription where you can create:
+- an Azure subscription where you can create:
   - Container Apps
   - PostgreSQL Flexible Server
   - Azure Managed Redis
@@ -105,13 +93,14 @@ The bootstrap script will:
 - offer to run `az login` and `azd auth login` for you if either session is missing
 - create or select an `azd` environment
 - set `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`, and `DEPLOYMENT_PREFIX`
+- show derived Azure resource name previews
 - explain optional PostgreSQL, Redis, and image overrides
 - generate missing local secret values
 - optionally help with console SSO through Entra ID
 - offer `azd provision --preview`
 - offer `azd up`
 
-If you prefer the older manual flow, the minimum values are still:
+If you prefer the manual flow, the minimum values are still:
 
 ```bash
 azd env new
@@ -125,14 +114,14 @@ The hooks and bootstrap together will:
 - generate strong defaults for Dify and platform secrets
 - provision the Azure infrastructure
 - create the Dify and plugin PostgreSQL databases
-- allowlist `vector` on PostgreSQL
+- allowlist PostgreSQL extensions needed by Dify
 - run `CREATE EXTENSION IF NOT EXISTS vector;`
 
 If public IP autodiscovery is blocked in your environment, set `POSTPROVISION_PUBLIC_IP` before running `azd up`.
 
 ## Important environment values
 
-These are the main inputs used by `infra/main.parameters.json`.
+These are the main inputs used by [infra/main.parameters.json](/home/john/repos/dify-aca/infra/main.parameters.json).
 
 Required:
 
@@ -155,7 +144,7 @@ Optional but commonly overridden:
 - `GATEWAY_IMAGE`
 - `SSRF_PROXY_IMAGE`
 
-Secrets auto-generated by `scripts/preprovision.sh` unless already set:
+Secrets auto-generated by [scripts/preprovision.sh](/home/john/repos/dify-aca/scripts/preprovision.sh) unless already set:
 
 - `POSTGRES_ADMIN_PASSWORD`
 - `DIFY_SECRET_KEY`
@@ -181,46 +170,34 @@ After a successful `azd up`, `azd` writes outputs back into the environment. The
 - `DIFY_BLOB_CONTAINER_NAME`
 - `PLUGIN_BLOB_CONTAINER_NAME`
 
-## Manual post-deployment steps
+## Post-deployment operator steps
 
-The platform deploys Dify, but the product bootstrap is still manual:
+The infrastructure deploy is automated. Dify product setup is still manual:
 
 1. Open `CONSOLE_URL`.
-2. Complete the Dify install flow.
-3. Add model provider credentials in the Dify UI.
-4. Validate file upload, background jobs, and dataset indexing.
+2. Sign in with Entra if console auth is enabled.
+3. Complete the Dify install flow at `/install`.
+4. Create the initial admin account and workspace.
+5. Add model provider credentials in the Dify UI.
+6. Validate file upload, background jobs, plugin install, and dataset indexing.
 
-## Remaining work
-
-The main gaps to close next are:
-
-- install `azd` in the working environment and perform the first real `azd up`
-- fix anything that fails during first Azure deployment
-- verify the nginx gateway behavior against Dify’s actual route expectations
-- confirm PostgreSQL SSL behavior for both Dify API and plugin daemon
-- confirm Azure Managed Redis connectivity and Celery behavior under ACA
-- verify Blob access with managed identity for the main Dify storage path
-- verify Blob access with connection string for plugin storage
-- decide whether the split public/admin gateway model is sufficient or needs stricter path isolation
-- decide whether custom domains and DNS should be part of the next milestone
-- add automated validation for the deployed environment
-
-## Entra ID notes
+## Console auth notes
 
 When `ENABLE_CONSOLE_AUTH=true`, the deployment creates a Container Apps auth configuration on the console gateway using your Entra app registration details.
 
-Your app registration should allow the console callback on the deployed host. For the Azure default domain flow, use:
+For the Azure default domain flow, the required redirect URI is:
 
 ```text
 https://<console-gateway-app-name>.<managed-environment-default-domain>/.auth/login/aad/callback
 ```
 
-Because the final hostname is generated during deployment, the first deployment is usually easiest if you either:
+The bootstrap script supports the normal two-step setup:
 
-- pre-register a broader redirect strategy you control later with a custom domain, or
-- deploy once with console auth disabled, capture `CONSOLE_URL`, update the app registration, then redeploy with auth enabled
+1. deploy once to discover `CONSOLE_URL`
+2. update the Entra app registration redirect URI
+3. redeploy with console auth enabled
 
-The bootstrap script supports that second pattern directly. If `CONSOLE_URL` is not known yet, it keeps `ENABLE_CONSOLE_AUTH=false`, stores the Entra values you already have, marks the environment as pending auth enablement, and can drive the second `azd up` after the redirect URI is updated.
+The current auth configuration explicitly excludes Dify first-run setup routes so `/install` and the related setup APIs continue to work when Entra protection is enabled on the console gateway.
 
 For the current repo implementation, the important Entra app registration requirements are:
 
@@ -233,17 +210,47 @@ Simple console sign-in does not require Microsoft Graph `User.Read` delegated pe
 
 ## Architecture notes
 
-- Main Dify file storage uses Azure Blob with managed identity and RBAC.
-- Plugin storage still uses Azure Blob through a connection string because the plugin daemon configuration surface is different from the main Dify storage path.
-- The admin surface is fronted by `console-gateway`.
 - The public app surface is fronted by `app-gateway`.
-- Both gateways proxy to the same internal Dify web and API services.
+- The admin surface is fronted by `console-gateway`.
+- Both gateways proxy to internal ACA service FQDNs over HTTPS.
+- Main Dify file storage uses Azure Blob with a Key Vault-backed storage account key secret.
+- Plugin storage uses Azure Blob through a connection string secret because the plugin daemon expects a different configuration surface.
+- PostgreSQL connections are configured with SSL required.
+- The post-provision hook enables `pgvector` after deployment.
+
+## Validation
+
+Minimum validation for changes in this repo:
+
+- `azd provision --preview -e <env>`
+- `sh scripts/test-bootstrap-common.sh`
+- `azd up` in a disposable environment when infrastructure behavior changes materially
+- manual verification of the affected Dify flows in Azure
+
+Recent manual validation on the working baseline has covered:
+
+- console sign-in via Entra
+- Dify install flow at `/install`
+- console routing through `/apps`
+- blob storage access for Dify uploads
+- PostgreSQL `pgvector` bootstrap
 
 ## Known limitations
 
-- Public networking only in v1
-- No custom domains or certificates yet
-- No private DNS or private endpoints
-- No automated Dify workspace, user, or model-provider bootstrap
-- No completed Azure deployment verification has been run from this repo yet
-- The app and console gateways are separated operationally, but Dify’s frontend routing model still deserves more hardening if you want strict public/admin path isolation
+- public networking only in v1
+- no custom domains or certificates yet
+- no private DNS or private endpoints
+- no automated Dify workspace, user, or model-provider bootstrap
+- no CI/CD pipeline or smoke-test automation yet
+- the public and console gateways are separated, but stricter app/admin path isolation may still be desirable later
+- Dify `1.13.3` has a broken `/console/api/init` flow in this deployment model; if needed, the repo supports disabling the init-password gate by setting `DIFY_INIT_PASSWORD=__DISABLED__`
+
+## Next improvements
+
+The highest-value next steps are:
+
+- add repeatable deployment smoke tests for health, login, and setup endpoints
+- add stronger post-deploy verification for uploads, workers, plugins, and indexing
+- harden the networking model with private access patterns where needed
+- decide whether custom domains and DNS automation belong in the next milestone
+- evaluate future Dify upgrades and remove any version-specific workarounds that are no longer needed
