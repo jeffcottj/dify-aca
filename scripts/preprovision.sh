@@ -7,7 +7,9 @@ SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 
 bootstrap_require_cmd azd
 bootstrap_require_cmd az
+bootstrap_require_cmd curl
 bootstrap_require_cmd openssl
+bootstrap_require_cmd python3
 
 if [ -z "${AZURE_ENV_NAME:-}" ]; then
   bootstrap_error "AZURE_ENV_NAME is required in the preprovision hook."

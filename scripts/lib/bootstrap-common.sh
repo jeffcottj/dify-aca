@@ -27,6 +27,43 @@ bootstrap_require_cmd() {
   fi
 }
 
+bootstrap_env_exists() {
+  env_name="$1"
+  [ -n "$env_name" ] || return 1
+  if [ -f ".azure/$env_name/.env" ]; then
+    return 0
+  fi
+  azd env list 2>/dev/null | awk 'NR > 1 { print $1 }' | grep -Fx "$env_name" >/dev/null 2>&1
+}
+
+bootstrap_allow_explicit_blank() {
+  case "$1" in
+    DIFY_INIT_PASSWORD) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+bootstrap_env_key_is_explicitly_blank() {
+  key="$1"
+  env_name="$2"
+
+  bootstrap_allow_explicit_blank "$key" || return 1
+  [ -n "$env_name" ] || return 1
+
+  env_file=".azure/$env_name/.env"
+  [ -f "$env_file" ] || return 1
+
+  line="$(grep -E "^${key}=" "$env_file" | tail -n 1)"
+  case "$line" in
+    "$key="|"$key=\"\""|"$key=''" )
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 bootstrap_env_read() {
   key="$1"
   env_name="${2:-}"
@@ -38,7 +75,12 @@ bootstrap_env_read() {
   fi
 
   if [ -n "$env_name" ]; then
-    azd env get-value "$key" -e "$env_name" 2>/dev/null || true
+    if ! bootstrap_env_exists "$env_name"; then
+      return 0
+    fi
+    if value="$(azd env get-value "$key" -e "$env_name" 2>/dev/null)"; then
+      printf '%s' "$value"
+    fi
     return 0
   fi
 
@@ -68,6 +110,11 @@ bootstrap_set_if_missing() {
   current="$(bootstrap_env_read "$key" "$env_name")"
   if [ -n "$current" ]; then
     bootstrap_export_value "$key" "$current"
+    return 1
+  fi
+
+  if bootstrap_env_key_is_explicitly_blank "$key" "$env_name"; then
+    bootstrap_export_value "$key" ''
     return 1
   fi
 
@@ -117,6 +164,21 @@ bootstrap_guess_tenant_id() {
   fi
 
   az account show --query tenantId -o tsv 2>/dev/null || true
+}
+
+bootstrap_subscription_has_location() {
+  subscription_id="$1"
+  location_name="$2"
+
+  result="$(
+    az rest \
+      --method get \
+      --url "https://management.azure.com/subscriptions/$subscription_id/locations?api-version=2022-12-01" \
+      --query "value[?type=='Region' && name=='$location_name'].name" \
+      -o tsv 2>/dev/null
+  )" || return 2
+
+  printf '%s\n' "$result" | grep -Fx "$location_name" >/dev/null 2>&1
 }
 
 bootstrap_default_keys() {
@@ -188,7 +250,11 @@ EOF
       ;;
     DEPLOYMENT_PREFIX)
       cat <<'EOF'
-Short prefix used in resource names. The default is "dify", which keeps names recognizable. Override it when you want multiple unrelated Dify deployments in the same subscription or need a team/project-specific prefix.
+Short word added to Azure resource names for this deployment. The default is "dify", so names stay readable and easy to recognize.
+
+Example: if the prefix is "dify" and the environment is "prod", resource names will start with values like "dify-prod-...".
+
+Change it when you want a team name, project name, or another label that helps distinguish this deployment from other Azure resources in the same subscription.
 EOF
       ;;
     POSTGRES_ADMIN_USERNAME)

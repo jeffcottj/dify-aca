@@ -58,19 +58,19 @@ prompt_value() {
 
   while :; do
     if [ -n "$default_value" ]; then
-      printf '%s [%s] (? for help): ' "$label" "$default_value"
+      printf '%s [%s] (? for help): ' "$label" "$default_value" >&2
     elif [ "$allow_empty" = "true" ]; then
-      printf '%s [optional] (? for help): ' "$label"
+      printf '%s [optional] (? for help): ' "$label" >&2
     else
-      printf '%s [required] (? for help): ' "$label"
+      printf '%s [required] (? for help): ' "$label" >&2
     fi
 
     IFS= read -r answer || exit 1
     case "$answer" in
       '?')
-        bootstrap_info ""
-        bootstrap_info "$help_text"
-        bootstrap_info ""
+        bootstrap_info "" >&2
+        bootstrap_info "$help_text" >&2
+        bootstrap_info "" >&2
         ;;
       '')
         if [ -n "$default_value" ]; then
@@ -98,9 +98,9 @@ prompt_yes_no() {
 
   while :; do
     if [ "$default_answer" = "yes" ]; then
-      printf '%s [Y/n/?]: ' "$label"
+      printf '%s [Y/n/?]: ' "$label" >&2
     else
-      printf '%s [y/N/?]: ' "$label"
+      printf '%s [y/N/?]: ' "$label" >&2
     fi
 
     IFS= read -r answer || exit 1
@@ -110,9 +110,9 @@ prompt_yes_no() {
         ;;
       '?')
         if [ -n "$help_text" ]; then
-          bootstrap_info ""
-          bootstrap_info "$help_text"
-          bootstrap_info ""
+          bootstrap_info "" >&2
+          bootstrap_info "$help_text" >&2
+          bootstrap_info "" >&2
         fi
         continue
         ;;
@@ -140,9 +140,9 @@ prompt_secret_value() {
 
   while :; do
     if [ "$keep_existing" = "true" ]; then
-      printf '%s [press Enter to keep current, ? for help]: ' "$label"
+      printf '%s [press Enter to keep current, ? for help]: ' "$label" >&2
     else
-      printf '%s [required, ? for help]: ' "$label"
+      printf '%s [required, ? for help]: ' "$label" >&2
     fi
 
     old_tty=''
@@ -156,13 +156,13 @@ prompt_secret_value() {
     if [ -n "$old_tty" ]; then
       stty "$old_tty" 2>/dev/null || true
     fi
-    printf '\n'
+    printf '\n' >&2
 
     case "$answer" in
       '?')
-        bootstrap_info ""
-        bootstrap_info "$help_text"
-        bootstrap_info ""
+        bootstrap_info "" >&2
+        bootstrap_info "$help_text" >&2
+        bootstrap_info "" >&2
         ;;
       '')
         if [ "$keep_existing" = "true" ]; then
@@ -181,7 +181,7 @@ prompt_secret_value() {
 
 env_exists() {
   env_name="$1"
-  azd env list | awk 'NR > 1 { print $1 }' | grep -Fx "$env_name" >/dev/null 2>&1
+  bootstrap_env_exists "$env_name"
 }
 
 existing_default_env() {
@@ -190,8 +190,8 @@ existing_default_env() {
 
 ensure_azure_login() {
   if ! az account show >/dev/null 2>&1; then
-    bootstrap_warn "Azure CLI is not logged in."
-    if prompt_yes_no "Run az login now?" "yes" "The bootstrap script needs an Azure CLI session to read subscriptions, regions, and optional Entra app registration data."; then
+    bootstrap_warn "Azure CLI is not signed in yet."
+    if prompt_yes_no "Open the Azure CLI sign-in flow now with az login?" "yes" "The bootstrap script can start Azure CLI sign-in for you. This is required so the script can read subscriptions, regions, and optional Entra app registration data."; then
       az login
     else
       bootstrap_error "Azure CLI login is required."
@@ -201,8 +201,8 @@ ensure_azure_login() {
 
 ensure_azd_login() {
   if ! azd auth login --check-status >/dev/null 2>&1; then
-    bootstrap_warn "Azure Developer CLI is not logged in."
-    if prompt_yes_no "Run azd auth login now?" "yes" "azd needs its own login state so the later preview and deploy steps do not stop for authentication."; then
+    bootstrap_warn "Azure Developer CLI is not signed in yet."
+    if prompt_yes_no "Open the Azure Developer CLI sign-in flow now with azd auth login?" "yes" "The bootstrap script can start Azure Developer CLI sign-in for you. This keeps later preview and deploy steps from stopping for authentication."; then
       azd auth login
     else
       bootstrap_error "Azure Developer CLI login is required."
@@ -248,25 +248,51 @@ choose_environment() {
   fi
 
   bootstrap_info ""
+  bootstrap_info "Step 1 of 5: Choose an azd environment name."
+  bootstrap_info "This name selects an existing azd environment or creates a new one for this repo."
+  bootstrap_info ""
+  existing_env_output="$(azd env list)"
   bootstrap_info "Existing azd environments:"
-  azd env list
+  printf '%s\n' "$existing_env_output"
+  if ! printf '%s\n' "$existing_env_output" | awk 'NR > 1 && NF > 0 { found=1 } END { exit found ? 0 : 1 }'; then
+    bootstrap_info "No azd environments were found. Enter a name below to create your first one."
+  fi
   bootstrap_info ""
 
   suggested_env="$(existing_default_env)"
   [ -n "$suggested_env" ] || suggested_env="dev"
-  AZD_ENV_NAME_SELECTED="$(prompt_value "Environment name" "$suggested_env" "Use an existing environment name to edit/select that azd environment, or enter a new name to create one." "false")"
+  AZD_ENV_NAME_SELECTED="$(prompt_value "azd environment name" "$suggested_env" "Type the azd environment name to use for this deployment. If the name already exists, the script will update that environment. If it does not exist yet, the script will create it for you." "false")"
 }
 
 choose_subscription() {
-  current_subscription="$(bootstrap_env_read AZURE_SUBSCRIPTION_ID "$AZD_ENV_NAME_SELECTED")"
-  if [ -z "$current_subscription" ]; then
-    current_subscription="$(az account show --query id -o tsv)"
-  fi
-  current_name="$(az account show --subscription "$current_subscription" --query name -o tsv 2>/dev/null || true)"
+  current_subscription=''
+  current_name=''
 
   bootstrap_info ""
-  bootstrap_info "Current Azure subscription: ${current_name:-unknown} (${current_subscription})"
-  AZURE_SUBSCRIPTION_SELECTED="$(prompt_value "Azure subscription ID" "$current_subscription" "This value is optional in azd because azd can prompt later, but setting it here keeps preview and deploy non-interactive. Use the current default subscription unless you intentionally want this environment deployed elsewhere. Run 'az account list -o table' in another terminal if you need a different subscription ID." "false")"
+  bootstrap_info "Step 2 of 5: Choose the Azure subscription for this environment."
+
+  if env_exists "$AZD_ENV_NAME_SELECTED"; then
+    current_subscription="$(bootstrap_env_read AZURE_SUBSCRIPTION_ID "$AZD_ENV_NAME_SELECTED")"
+  fi
+  if [ -z "$current_subscription" ]; then
+    current_subscription="$(az account show --query id -o tsv 2>/dev/null || true)"
+  fi
+  if [ -n "$current_subscription" ]; then
+    current_name="$(az account show --subscription "$current_subscription" --query name -o tsv 2>/dev/null || true)"
+  fi
+
+  if [ -z "$current_subscription" ]; then
+    bootstrap_error "No Azure subscription is currently selected in Azure CLI. Run 'az account list -o table' to see subscriptions, then 'az account set --subscription <subscription-id>' before running this script again."
+  fi
+
+  if env_exists "$AZD_ENV_NAME_SELECTED"; then
+    bootstrap_info "The existing azd environment '$AZD_ENV_NAME_SELECTED' is currently set to:"
+  else
+    bootstrap_info "Azure CLI is currently set to:"
+  fi
+  bootstrap_info "Subscription: ${current_name:-unknown} (${current_subscription})"
+  bootstrap_info "Press Enter to use this subscription, or type a different subscription ID."
+  AZURE_SUBSCRIPTION_SELECTED="$(prompt_value "Azure subscription ID to use" "$current_subscription" "This script stores the subscription ID in the azd environment so later preview and deploy steps stay non-interactive. Press Enter to keep the subscription already selected in Azure CLI, or paste a different subscription ID if you want to deploy elsewhere." "false")"
 
   if ! az account show --subscription "$AZURE_SUBSCRIPTION_SELECTED" >/dev/null 2>&1; then
     bootstrap_error "Unable to access subscription $AZURE_SUBSCRIPTION_SELECTED"
@@ -274,27 +300,65 @@ choose_subscription() {
 }
 
 choose_location() {
-  existing_location="$(bootstrap_env_read AZURE_LOCATION "$AZD_ENV_NAME_SELECTED")"
+  bootstrap_info ""
+  bootstrap_info "Step 3 of 5: Choose the Azure region."
+
+  existing_location=''
+  if env_exists "$AZD_ENV_NAME_SELECTED"; then
+    existing_location="$(bootstrap_env_read AZURE_LOCATION "$AZD_ENV_NAME_SELECTED")"
+  fi
   suggested_location="$existing_location"
   [ -n "$suggested_location" ] || suggested_location="$(bootstrap_default_for_key AZURE_LOCATION)"
+  bootstrap_info "Press Enter to use the suggested region, or type a different Azure region name."
 
   while :; do
-    candidate="$(prompt_value "Azure location" "$suggested_location" "$(bootstrap_help_for_key AZURE_LOCATION)" "false")"
-    if az account list-locations --subscription "$AZURE_SUBSCRIPTION_SELECTED" --query "[?name=='$candidate'].name" -o tsv | grep -Fx "$candidate" >/dev/null 2>&1; then
+    candidate="$(prompt_value "Azure region name" "$suggested_location" "$(bootstrap_help_for_key AZURE_LOCATION)" "false")"
+    if bootstrap_subscription_has_location "$AZURE_SUBSCRIPTION_SELECTED" "$candidate"; then
       AZURE_LOCATION_SELECTED="$candidate"
       return 0
     fi
-    bootstrap_warn "Location '$candidate' is not valid for the selected subscription."
+    validation_status=$?
+    if [ "$validation_status" -eq 2 ]; then
+      bootstrap_error "Unable to validate Azure regions for subscription $AZURE_SUBSCRIPTION_SELECTED. Check Azure CLI access with 'az account show --subscription $AZURE_SUBSCRIPTION_SELECTED' or list regions directly with 'az rest --method get --url https://management.azure.com/subscriptions/$AZURE_SUBSCRIPTION_SELECTED/locations?api-version=2022-12-01'."
+    fi
+    bootstrap_warn "Location '$candidate' is not available for the selected subscription."
   done
+}
+
+choose_deployment_prefix() {
+  bootstrap_info ""
+  bootstrap_info "Step 4 of 5: Choose a deployment prefix."
+  bootstrap_info "This is a short word added to Azure resource names so this deployment is easy to recognize."
+  bootstrap_info "Example: if you use the prefix 'dify' and the environment name 'prod', resource names start with values like 'dify-prod-...'."
+  bootstrap_info ""
+
+  existing_prefix=''
+  if env_exists "$AZD_ENV_NAME_SELECTED"; then
+    existing_prefix="$(bootstrap_env_read DEPLOYMENT_PREFIX "$AZD_ENV_NAME_SELECTED")"
+  fi
+
+  DEPLOYMENT_PREFIX_SELECTED="$(prompt_value "Deployment prefix" "${existing_prefix:-$(bootstrap_default_for_key DEPLOYMENT_PREFIX)}" "$(bootstrap_help_for_key DEPLOYMENT_PREFIX)" "false")"
+  bootstrap_export_value DEPLOYMENT_PREFIX "$DEPLOYMENT_PREFIX_SELECTED"
+
+  bootstrap_preview_truncation_warnings "$AZD_ENV_NAME_SELECTED" "$DEPLOYMENT_PREFIX_SELECTED"
+  bootstrap_info ""
+  bootstrap_info "Derived name preview:"
+  bootstrap_render_name_preview "$AZD_ENV_NAME_SELECTED" "$DEPLOYMENT_PREFIX_SELECTED"
 }
 
 ensure_environment_selected() {
   if env_exists "$AZD_ENV_NAME_SELECTED"; then
-    azd env select "$AZD_ENV_NAME_SELECTED" >/dev/null
+    bootstrap_info ""
+    bootstrap_info "Step 5 of 5: Select the azd environment."
+    azd env select "$AZD_ENV_NAME_SELECTED" --no-prompt >/dev/null
     record_summary "AZURE_ENV_NAME" "existing" "$AZD_ENV_NAME_SELECTED"
   else
-    bootstrap_info "Creating azd environment $AZD_ENV_NAME_SELECTED..."
-    azd env new "$AZD_ENV_NAME_SELECTED" --subscription "$AZURE_SUBSCRIPTION_SELECTED" --location "$AZURE_LOCATION_SELECTED" >/dev/null
+    bootstrap_info ""
+    bootstrap_info "Step 5 of 5: Create the azd environment."
+    bootstrap_info "Creating azd environment '$AZD_ENV_NAME_SELECTED'..."
+    if ! azd env new "$AZD_ENV_NAME_SELECTED" --subscription "$AZURE_SUBSCRIPTION_SELECTED" --location "$AZURE_LOCATION_SELECTED" --no-prompt; then
+      bootstrap_error "Unable to create azd environment '$AZD_ENV_NAME_SELECTED'. Run 'azd env list' to confirm whether it already exists locally, then rerun this script or select the environment manually with 'azd env select $AZD_ENV_NAME_SELECTED'."
+    fi
     record_summary "AZURE_ENV_NAME" "chosen" "$AZD_ENV_NAME_SELECTED"
   fi
   bootstrap_export_value AZURE_ENV_NAME "$AZD_ENV_NAME_SELECTED"
@@ -352,6 +416,9 @@ apply_generated_secrets_with_summary() {
     if [ -n "$current_value" ]; then
       bootstrap_export_value "$key" "$current_value"
       track_hidden_value "$key" "existing"
+    elif bootstrap_env_key_is_explicitly_blank "$key" "$AZD_ENV_NAME_SELECTED"; then
+      bootstrap_export_value "$key" ''
+      track_hidden_value "$key" "existing-blank"
     else
       bootstrap_env_set "$AZD_ENV_NAME_SELECTED" "$key" "$(bootstrap_generated_secret_value "$key")"
       track_hidden_value "$key" "auto-generated"
@@ -396,9 +463,7 @@ create_or_update_entra_registration() {
   az ad app update --id "$app_id" --enable-id-token-issuance true >/dev/null || return 1
 
   if [ -n "$redirect_uri" ]; then
-    if ! az ad app show --id "$app_id" --query "contains(web.redirectUris, '$redirect_uri')" -o tsv 2>/dev/null | grep -qi '^true$'; then
-      az ad app update --id "$app_id" --add web.redirectUris "$redirect_uri" >/dev/null || return 1
-    fi
+    ensure_entra_web_redirect_uri "$app_id" "$redirect_uri" || return 1
     az ad app update --id "$app_id" --web-home-page-url "$console_url" >/dev/null || return 1
   fi
 
@@ -417,10 +482,27 @@ update_entra_redirect() {
 
   redirect_uri="${console_url%/}/.auth/login/aad/callback"
   az ad app update --id "$app_id" --enable-id-token-issuance true >/dev/null || return 1
-  if ! az ad app show --id "$app_id" --query "contains(web.redirectUris, '$redirect_uri')" -o tsv 2>/dev/null | grep -qi '^true$'; then
-    az ad app update --id "$app_id" --add web.redirectUris "$redirect_uri" >/dev/null || return 1
-  fi
+  ensure_entra_web_redirect_uri "$app_id" "$redirect_uri" || return 1
   az ad app update --id "$app_id" --web-home-page-url "$console_url" >/dev/null || return 1
+}
+
+ensure_entra_web_redirect_uri() {
+  app_id="$1"
+  redirect_uri="$2"
+
+  [ -n "$redirect_uri" ] || return 0
+
+  if az ad app show --id "$app_id" --query "contains(web.redirectUris, '$redirect_uri')" -o tsv 2>/dev/null | grep -qi '^true$'; then
+    return 0
+  fi
+
+  existing_redirect_uris="$(az ad app show --id "$app_id" --query "web.redirectUris[]" -o tsv 2>/dev/null)" || return 1
+  if [ -n "$existing_redirect_uris" ]; then
+    # Redirect URIs are whitespace-free, so passing the existing tsv output back to Azure CLI preserves the full set.
+    az ad app update --id "$app_id" --web-redirect-uris $existing_redirect_uris "$redirect_uri" >/dev/null || return 1
+  else
+    az ad app update --id "$app_id" --web-redirect-uris "$redirect_uri" >/dev/null || return 1
+  fi
 }
 
 print_manual_entra_steps() {
@@ -439,10 +521,11 @@ print_manual_entra_steps() {
   if [ -n "$console_url" ]; then
     bootstrap_info "3. Add the console redirect URI:"
     if [ -n "$app_id_hint" ]; then
-      bootstrap_info "   az ad app update --id $app_id_hint --add web.redirectUris ${console_url%/}/.auth/login/aad/callback"
+      bootstrap_info "   az ad app update --id $app_id_hint --web-redirect-uris ${console_url%/}/.auth/login/aad/callback"
     else
-      bootstrap_info "   az ad app update --id <app-registration-client-id> --add web.redirectUris ${console_url%/}/.auth/login/aad/callback"
+      bootstrap_info "   az ad app update --id <app-registration-client-id> --web-redirect-uris ${console_url%/}/.auth/login/aad/callback"
     fi
+    bootstrap_info "   Include any existing web redirect URIs you still need in the same command, because Azure CLI replaces the full web redirect URI list."
   else
     bootstrap_info "3. After the first deployment, add this redirect URI:"
     bootstrap_info "   <CONSOLE_URL>/.auth/login/aad/callback"
@@ -457,10 +540,11 @@ configure_console_auth() {
   current_console_url="$(bootstrap_env_read CONSOLE_URL "$AZD_ENV_NAME_SELECTED")"
 
   bootstrap_info ""
-  bootstrap_info "Console auth notes:"
-  bootstrap_info "- This repo's current Container Apps auth config is single-tenant."
-  bootstrap_info "- The required redirect URI is <CONSOLE_URL>/.auth/login/aad/callback."
-  bootstrap_info "- New environments usually need one deploy before CONSOLE_URL is known."
+  bootstrap_info "Console sign-in notes:"
+  bootstrap_info "- Microsoft Entra sign-in is optional."
+  bootstrap_info "- This repo currently uses a single-tenant Container Apps auth setup."
+  bootstrap_info "- The final redirect URI must be <CONSOLE_URL>/.auth/login/aad/callback."
+  bootstrap_info "- Brand-new environments usually need one deployment before CONSOLE_URL is known."
   bootstrap_info ""
 
   default_enable="no"
@@ -629,12 +713,7 @@ apply_core_values() {
   fi
 
   prefix_current="$(bootstrap_env_read DEPLOYMENT_PREFIX "$AZD_ENV_NAME_SELECTED")"
-  prefix_value="$(prompt_value "Deployment prefix" "${prefix_current:-$(bootstrap_default_for_key DEPLOYMENT_PREFIX)}" "$(bootstrap_help_for_key DEPLOYMENT_PREFIX)" "false")"
-  bootstrap_preview_truncation_warnings "$AZD_ENV_NAME_SELECTED" "$prefix_value"
-  bootstrap_info ""
-  bootstrap_info "Derived name preview:"
-  bootstrap_render_name_preview "$AZD_ENV_NAME_SELECTED" "$prefix_value"
-  bootstrap_info ""
+  prefix_value="${DEPLOYMENT_PREFIX_SELECTED:-${prefix_current:-$(bootstrap_default_for_key DEPLOYMENT_PREFIX)}}"
   bootstrap_env_set "$AZD_ENV_NAME_SELECTED" DEPLOYMENT_PREFIX "$prefix_value"
   if [ -n "$prefix_current" ] && [ "$prefix_current" = "$prefix_value" ]; then
     record_summary "DEPLOYMENT_PREFIX" "existing" "$prefix_value"
@@ -649,19 +728,22 @@ bootstrap_require_cmd azd
 bootstrap_require_cmd az
 bootstrap_require_cmd openssl
 
-bootstrap_info "This bootstrap configures an azd environment for the Dify ACA deployment and can optionally run azd provision --preview and azd up."
-bootstrap_info "The selected .azure/<env>/.env file is gitignored, but it still stores values locally in plaintext before Azure resources exist. Treat that file accordingly."
+bootstrap_info "This guided setup prepares an azd environment for deploying Dify to Azure Container Apps."
+bootstrap_info "It can also run 'azd provision --preview' and 'azd up' after the environment values are saved."
+bootstrap_info "If Azure CLI or Azure Developer CLI is not signed in yet, this script can start 'az login' and 'azd auth login' for you."
+bootstrap_info "The file .azure/<env>/.env is gitignored, but it still stores local plaintext values before Azure resources exist. Handle that file as sensitive."
 
 ensure_azure_login
 ensure_azd_login
 choose_environment
 choose_subscription
 choose_location
+choose_deployment_prefix
 ensure_resource_providers "$AZURE_SUBSCRIPTION_SELECTED"
 ensure_environment_selected
 apply_core_values
 
-if prompt_yes_no "Customize advanced database, Redis, and image values?" "no" "Choose yes if you want to override PostgreSQL sizing, Redis SKU, or any of the default container image tags. Choose no to accept or preserve the repo defaults."; then
+if prompt_yes_no "Do you want to customize advanced database, Redis, or image settings now?" "no" "Choose yes only if you want to override PostgreSQL sizing, Redis SKU, or the default container image tags. Choose no to keep the current environment values or the repo defaults."; then
   prompt_advanced="true"
 else
   prompt_advanced="false"
@@ -695,11 +777,11 @@ bootstrap_validate_console_auth_inputs "$AZD_ENV_NAME_SELECTED"
 render_summary
 
 bootstrap_info ""
-bootstrap_info "Next steps:"
-bootstrap_info "1. preview  - run azd provision --preview"
-bootstrap_info "2. up       - run azd up"
-bootstrap_info "3. write    - save configuration only"
-action="$(prompt_value "Choose next step (preview/up/write)" "up" "Preview runs a safe infrastructure diff. Up provisions infrastructure, runs hooks, and is the path that can reveal CONSOLE_URL for staged console-auth setup. Write exits after saving the environment file." "false")"
+bootstrap_info "What would you like the script to do next?"
+bootstrap_info "1. preview  - show the Azure infrastructure changes without deploying them"
+bootstrap_info "2. up       - deploy the environment now with azd up"
+bootstrap_info "3. write    - only save the environment file and stop"
+action="$(prompt_value "Next action (preview/up/write)" "up" "Choose 'preview' to inspect the infrastructure diff first, 'up' to deploy now, or 'write' to stop after saving the azd environment values." "false")"
 
 case "$(bootstrap_lower "$action")" in
   preview)

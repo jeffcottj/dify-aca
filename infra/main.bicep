@@ -185,12 +185,21 @@ resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   }
 }
 
+resource postgresAllowAzureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
+  parent: postgres
+  name: 'allow-azure-services'
+  properties: {
+    startIpAddress: '0.0.0.0'
+    endIpAddress: '0.0.0.0'
+  }
+}
+
 resource postgresAllowExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
   parent: postgres
   name: 'azure.extensions'
   properties: {
     source: 'user-override'
-    value: 'vector'
+    value: 'vector,uuid-ossp'
   }
 }
 
@@ -311,6 +320,14 @@ resource secretRedisCeleryBroker 'Microsoft.KeyVault/vaults/secrets@2024-11-01' 
   }
 }
 
+resource secretStorageAccountKey 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
+  parent: keyVault
+  name: 'storage-account-key'
+  properties: {
+    value: storageAccountKey
+  }
+}
+
 resource secretPluginStorageConnectionString 'Microsoft.KeyVault/vaults/secrets@2024-11-01' = {
   parent: keyVault
   name: 'plugin-storage-connection-string'
@@ -395,7 +412,14 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2025-01-01' = {
 
 var consoleUrl = 'https://${consoleGatewayAppName}.${managedEnvironment.properties.defaultDomain}'
 var appUrl = 'https://${appGatewayAppName}.${managedEnvironment.properties.defaultDomain}'
-var internalFilesUrl = 'http://${apiAppName}:5001/files'
+var apiInternalFqdn = '${apiAppName}.internal.${managedEnvironment.properties.defaultDomain}'
+var webInternalFqdn = '${webAppName}.internal.${managedEnvironment.properties.defaultDomain}'
+var pluginDaemonInternalFqdn = '${pluginDaemonAppName}.internal.${managedEnvironment.properties.defaultDomain}'
+var apiInternalUrl = 'https://${apiInternalFqdn}'
+var pluginDaemonInternalUrl = 'https://${pluginDaemonInternalFqdn}'
+var sandboxInternalUrl = 'http://${sandboxAppName}:8194'
+var ssrfProxyInternalUrl = 'http://${ssrfProxyAppName}:3128'
+var internalFilesUrl = '${apiInternalUrl}/files'
 var storageBlobUrl = storage.properties.primaryEndpoints.blob
 
 var sharedContainerAppSecrets = [
@@ -422,6 +446,11 @@ var sharedContainerAppSecrets = [
   {
     name: 'redis-celery-broker-url'
     keyVaultUrl: secretRedisCeleryBroker.properties.secretUriWithVersion
+    identity: containerAppsIdentity.id
+  }
+  {
+    name: 'storage-account-key'
+    keyVaultUrl: secretStorageAccountKey.properties.secretUriWithVersion
     identity: containerAppsIdentity.id
   }
   {
@@ -467,8 +496,9 @@ var consoleAuthSecrets = consoleAuthEnabled ? [
 var consoleGatewayTemplate = loadTextContent('templates/console-gateway.conf')
 var appGatewayTemplate = loadTextContent('templates/app-gateway.conf')
 var ssrfProxyTemplate = loadTextContent('templates/ssrf-proxy.conf')
+var initPasswordDisabled = difyInitPassword == '__DISABLED__'
 
-var apiWorkerCommonEnv = [
+var apiWorkerCommonEnv = concat([
   {
     name: 'CONSOLE_API_URL'
     value: consoleUrl
@@ -505,10 +535,12 @@ var apiWorkerCommonEnv = [
     name: 'SECRET_KEY'
     secretRef: 'dify-secret-key'
   }
+], initPasswordDisabled ? [] : [
   {
     name: 'INIT_PASSWORD'
     secretRef: 'dify-init-password'
   }
+], [
   {
     name: 'DB_TYPE'
     value: 'postgresql'
@@ -532,6 +564,14 @@ var apiWorkerCommonEnv = [
   {
     name: 'DB_PASSWORD'
     secretRef: 'postgres-admin-password'
+  }
+  {
+    name: 'DB_SSL_MODE'
+    value: 'require'
+  }
+  {
+    name: 'MIGRATION_ENABLED'
+    value: 'true'
   }
   {
     name: 'REDIS_HOST'
@@ -571,7 +611,7 @@ var apiWorkerCommonEnv = [
   }
   {
     name: 'STORAGE_TYPE'
-    value: 'azure_blob'
+    value: 'azure-blob'
   }
   {
     name: 'AZURE_BLOB_ACCOUNT_NAME'
@@ -579,7 +619,7 @@ var apiWorkerCommonEnv = [
   }
   {
     name: 'AZURE_BLOB_ACCOUNT_KEY'
-    value: 'managedidentity'
+    secretRef: 'storage-account-key'
   }
   {
     name: 'AZURE_BLOB_CONTAINER_NAME'
@@ -615,7 +655,7 @@ var apiWorkerCommonEnv = [
   }
   {
     name: 'PLUGIN_DAEMON_URL'
-    value: 'http://${pluginDaemonAppName}:5002'
+    value: pluginDaemonInternalUrl
   }
   {
     name: 'INNER_API_KEY_FOR_PLUGIN'
@@ -631,7 +671,7 @@ var apiWorkerCommonEnv = [
   }
   {
     name: 'CODE_EXECUTION_ENDPOINT'
-    value: 'http://${sandboxAppName}:8194'
+    value: sandboxInternalUrl
   }
   {
     name: 'CODE_EXECUTION_API_KEY'
@@ -639,17 +679,17 @@ var apiWorkerCommonEnv = [
   }
   {
     name: 'SSRF_PROXY_HTTP_URL'
-    value: 'http://${ssrfProxyAppName}:3128'
+    value: ssrfProxyInternalUrl
   }
   {
     name: 'SSRF_PROXY_HTTPS_URL'
-    value: 'http://${ssrfProxyAppName}:3128'
+    value: ssrfProxyInternalUrl
   }
   {
     name: 'RESPECT_XFORWARD_HEADERS_ENABLED'
     value: 'true'
   }
-]
+])
 
 var apiEnv = concat(apiWorkerCommonEnv, [
   {
@@ -694,6 +734,10 @@ var webEnv = [
     value: appUrl
   }
   {
+    name: 'HOSTNAME'
+    value: '0.0.0.0'
+  }
+  {
     name: 'NEXT_PUBLIC_COOKIE_DOMAIN'
     value: ''
   }
@@ -722,7 +766,7 @@ var pluginDaemonEnv = concat(apiWorkerCommonEnv, [
   }
   {
     name: 'DIFY_INNER_API_URL'
-    value: 'http://${apiAppName}:5001'
+    value: apiInternalUrl
   }
   {
     name: 'DIFY_INNER_API_KEY'
@@ -746,7 +790,7 @@ var pluginDaemonEnv = concat(apiWorkerCommonEnv, [
   }
   {
     name: 'PLUGIN_STORAGE_TYPE'
-    value: 'azure_blob'
+    value: 'azure-blob'
   }
   {
     name: 'AZURE_BLOB_STORAGE_CONNECTION_STRING'
@@ -777,11 +821,11 @@ var sandboxEnv = [
   }
   {
     name: 'HTTP_PROXY'
-    value: 'http://${ssrfProxyAppName}:3128'
+    value: ssrfProxyInternalUrl
   }
   {
     name: 'HTTPS_PROXY'
-    value: 'http://${ssrfProxyAppName}:3128'
+    value: ssrfProxyInternalUrl
   }
   {
     name: 'SANDBOX_PORT'
@@ -789,8 +833,8 @@ var sandboxEnv = [
   }
 ]
 
-var consoleGatewayConfig = replace(replace(replace(consoleGatewayTemplate, '__API__', apiAppName), '__PLUGIN__', pluginDaemonAppName), '__WEB__', webAppName)
-var appGatewayConfig = replace(replace(replace(appGatewayTemplate, '__API__', apiAppName), '__PLUGIN__', pluginDaemonAppName), '__WEB__', webAppName)
+var consoleGatewayConfig = replace(replace(replace(consoleGatewayTemplate, '__API__', apiInternalFqdn), '__PLUGIN__', pluginDaemonInternalFqdn), '__WEB__', webInternalFqdn)
+var appGatewayConfig = replace(replace(replace(appGatewayTemplate, '__API__', apiInternalFqdn), '__PLUGIN__', pluginDaemonInternalFqdn), '__WEB__', webInternalFqdn)
 var consoleGatewayStart = concat('''
 cat > /etc/nginx/conf.d/default.conf <<'EOF'
 ''', consoleGatewayConfig, '''
@@ -935,7 +979,7 @@ module ssrfProxyApp './modules/container-app.bicep' = {
     targetPort: 3128
     external: false
     cpu: '0.25'
-    memory: '512Mi'
+    memory: '0.5Gi'
   }
 }
 
@@ -960,7 +1004,7 @@ module consoleGatewayApp './modules/container-app.bicep' = {
     targetPort: 8080
     external: true
     cpu: '0.25'
-    memory: '512Mi'
+    memory: '0.5Gi'
   }
 }
 
@@ -985,7 +1029,7 @@ module appGatewayApp './modules/container-app.bicep' = {
     targetPort: 8080
     external: true
     cpu: '0.25'
-    memory: '512Mi'
+    memory: '0.5Gi'
   }
 }
 
@@ -996,6 +1040,9 @@ resource consoleGatewayExisting 'Microsoft.App/containerApps@2025-01-01' existin
 resource consoleGatewayAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = if (consoleAuthEnabled) {
   name: 'current'
   parent: consoleGatewayExisting
+  dependsOn: [
+    consoleGatewayApp
+  ]
   properties: {
     platform: {
       enabled: true
@@ -1004,6 +1051,13 @@ resource consoleGatewayAuth 'Microsoft.App/containerApps/authConfigs@2025-01-01'
     globalValidation: {
       unauthenticatedClientAction: 'RedirectToLoginPage'
       redirectToProvider: 'azureActiveDirectory'
+      excludedPaths: [
+        '/install'
+        '/init'
+        '/console/api/setup'
+        '/console/api/init'
+        '/console/api/system-features'
+      ]
     }
     httpSettings: {
       requireHttps: true

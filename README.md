@@ -41,7 +41,7 @@ The operator workflow is:
 3. Optionally review `azd provision --preview`.
 4. Run `azd up`.
 
-The pre-provision hook generates missing secrets automatically. The post-provision hook enables `pgvector` in the Dify database.
+The pre-provision hook generates missing secrets automatically. The post-provision hook enables `pgvector` in the Dify database by temporarily allowing the operator public IP, connecting with a cached Python PostgreSQL client, and then removing that firewall rule.
 
 ## Definition Of Done
 
@@ -72,6 +72,8 @@ This implementation intentionally optimizes for getting to a repeatable working 
 
 - `azd`
 - `az` 2.84.0 or later
+- `curl`
+- `python3`
 - An Azure subscription where you can create:
   - Container Apps
   - PostgreSQL Flexible Server
@@ -83,7 +85,7 @@ This implementation intentionally optimizes for getting to a repeatable working 
 Install `azd` from the official instructions:
 https://aka.ms/azure-dev/install
 
-Then authenticate:
+If you prefer, you can authenticate up front:
 
 ```bash
 az login
@@ -100,6 +102,7 @@ sh scripts/bootstrap-env.sh
 
 The bootstrap script will:
 
+- offer to run `az login` and `azd auth login` for you if either session is missing
 - create or select an `azd` environment
 - set `AZURE_SUBSCRIPTION_ID`, `AZURE_LOCATION`, and `DEPLOYMENT_PREFIX`
 - explain optional PostgreSQL, Redis, and image overrides
@@ -124,6 +127,8 @@ The hooks and bootstrap together will:
 - create the Dify and plugin PostgreSQL databases
 - allowlist `vector` on PostgreSQL
 - run `CREATE EXTENSION IF NOT EXISTS vector;`
+
+If public IP autodiscovery is blocked in your environment, set `POSTPROVISION_PUBLIC_IP` before running `azd up`.
 
 ## Important environment values
 
